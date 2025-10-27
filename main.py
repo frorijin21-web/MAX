@@ -122,27 +122,31 @@ def query_ip_api(ip):
         logger.debug("query_ip_api error for %s: %s", ip, e)
         return None
 
-def check_connect_proxy(proxy_host, proxy_port, target_host="www.google.com", target_port=443):
-    """فحص بروتوكول CONNECT للبروكسي"""
+def smart_proxy_scan(ip, port):
+    """فحص كل بروتوكول على حدة مثل السكريبت الثاني"""
+    protocols = []
+    
+    # 1. فحص HTTP
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(HTTP_TIMEOUT)
-        sock.connect((proxy_host, proxy_port))
-        
-        # إرسال طلب CONNECT
-        connect_msg = f"CONNECT {target_host}:{target_port} HTTP/1.1\r\nHost: {target_host}\r\n\r\n"
-        sock.send(connect_msg.encode())
-        
-        response = sock.recv(4096).decode()
-        sock.close()
-        
-        if "200" in response or "Connection established" in response:
-            return True
-        else:
-            return False
-            
-    except Exception as e:
-        return False
+        r = requests.get(f'http://{ip}:{port}', timeout=HTTP_TIMEOUT, 
+                        headers={'User-Agent': 'Mozilla/5.0'}, allow_redirects=True)
+        if r.status_code < 500:
+            protocols.append("HTTP")
+    except: pass
+    
+    # 2. فحص HTTPS  
+    try:
+        r = requests.get(f'https://{ip}:{port}', timeout=HTTP_TIMEOUT,
+                        headers={'User-Agent': 'Mozilla/5.0'}, allow_redirects=True, verify=False)
+        if r.status_code < 500:
+            protocols.append("HTTPS")
+    except: pass
+    
+    # 3. فحص CONNECT
+    if check_connect_proxy(ip, port):
+        protocols.append("CONNECT")
+    
+    return len(protocols) > 0  # ⬅️ يعطي True إذا وجد أي بروتوكول ناجح
 
 def check_port_http(ip, port):
     """فحص HTTP/HTTPS/CONNECT (مزامن)"""
