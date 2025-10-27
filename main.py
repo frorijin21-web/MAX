@@ -20,7 +20,7 @@ SSH_PAYLOAD = {"store_owner_id": 1}
 SSH_HEADERS = {"Accept": "application/json", "Content-Type": "application/json"}
 
 # إعدادات البوت (استبدل التوكن بالتوكن الحقيقي عند الحاجة)
-TOKEN = '8401208806:AAFQgbDRWAOcgenD5JqozMB7zVoZrhLel7c'
+TOKEN = '8420676859:AAGQ6ZgnTuUs648v_79hR_CEIw6VUqRE2B4'
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
 criticalASN = 'AS396982'
