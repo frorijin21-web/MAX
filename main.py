@@ -122,7 +122,7 @@ def query_ip_api(ip):
         logger.debug("query_ip_api error for %s: %s", ip, e)
         return None
 
-def check_connect_proxy(proxy_host, proxy_port, target_host="www.google.com", target_port=80):
+def check_connect_proxy(proxy_host, proxy_port, target_host="www.google.com", target_port=443):
     """فحص بروتوكول CONNECT للبروكسي"""
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -136,7 +136,7 @@ def check_connect_proxy(proxy_host, proxy_port, target_host="www.google.com", ta
         response = sock.recv(4096).decode()
         sock.close()
         
-        if "200" in response:
+        if "200" in response or "Connection established" in response:
             return True
         else:
             return False
