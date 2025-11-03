@@ -57,7 +57,6 @@ def send_google_alert(chat_id, proxy_info):
    🌐 HTTP: {proxy_info['http']}
    🔒 HTTPS: {proxy_info['https']}
    🔌 CONNECT 80: {proxy_info['connect_80']}
-   🔐 CONNECT 443: {proxy_info['connect_443']}
 
 ⚡ **بروكسي Google نادر وجودة عالية!**
 """
@@ -109,7 +108,7 @@ def get_risk_emoji(risk_level):
     return emojis.get(risk_level, '⚪❓')
 
 def check_single_proxy(proxy_ip, proxy_port, chat_id):
-    """فحص HTTP/HTTPS/CONNECT بدقة"""
+    """فحص HTTP/HTTPS/CONNECT 80 فقط - سريع وخفيف"""
     try:
         proxy_dict = {
             'http': f"http://{proxy_ip}:{proxy_port}",
@@ -122,92 +121,45 @@ def check_single_proxy(proxy_ip, proxy_port, chat_id):
             'http': '❌',
             'https': '❌',
             'connect_80': '❌',
-            'connect_443': '❌',
-            'socks_test': '❌',
             'ip_info': None,
             'is_working': False
         }
         
-        # فحص CONNECT على منفذ 80
+        # فحص CONNECT 80 سريع
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
+            sock.settimeout(3)
             result = sock.connect_ex((proxy_ip, int(proxy_port)))
             if result == 0:
                 results['connect_80'] = '✅'
-                # محاولة إرسال بيانات بسيطة للتأكد
-                try:
-                    sock.send(b"HEAD / HTTP/1.1\r\n\r\n")
-                    response = sock.recv(1024)
-                    if response:
-                        results['connect_80'] = '✅'
-                except:
-                    results['connect_80'] = '✅'  # يظل صح إذا نجح الاتصال الأساسي
             sock.close()
         except:
             pass
         
-        # فحص CONNECT على منفذ 443
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
-            result = sock.connect_ex((proxy_ip, int(proxy_port)))
-            if result == 0:
-                results['connect_443'] = '✅'
-            sock.close()
-        except:
-            pass
-        
-        # فحص HTTP مع تحقق إضافي
+        # فحص HTTP سريع
         try:
             response = requests.get(
                 'http://httpbin.org/ip', 
                 proxies=proxy_dict, 
-                timeout=10,
-                headers={
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'Accept': 'application/json'
-                }
+                timeout=3,
+                headers={'User-Agent': 'Mozilla/5.0'}
             )
             if response.status_code == 200:
-                # تحقق من أن الرد فعلاً من خلال البروكسي
-                data = response.json()
-                if 'origin' in data:
-                    results['http'] = '✅'
+                results['http'] = '✅'
         except:
             pass
         
-        # فحص HTTPS مع تحقق إضافي
+        # فحص HTTPS سريع
         try:
             response = requests.get(
                 'https://httpbin.org/ip',
                 proxies=proxy_dict, 
-                timeout=10,
-                headers={
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'Accept': 'application/json'
-                },
-                verify=False  # تجاهل SSL للسرعة
+                timeout=3,
+                headers={'User-Agent': 'Mozilla/5.0'},
+                verify=False
             )
             if response.status_code == 200:
-                data = response.json()
-                if 'origin' in data:
-                    results['https'] = '✅'
-        except:
-            pass
-        
-        # فحص SOCKS بسيط
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
-            result = sock.connect_ex((proxy_ip, int(proxy_port)))
-            if result == 0:
-                # اختبار بسيط لـ SOCKS
-                sock.send(b"\x05\x01\x00")
-                response = sock.recv(1024)
-                if response and len(response) >= 2:
-                    results['socks_test'] = '✅'
-            sock.close()
+                results['https'] = '✅'
         except:
             pass
         
@@ -215,14 +167,7 @@ def check_single_proxy(proxy_ip, proxy_port, chat_id):
         results['ip_info'] = get_detailed_ip_info(proxy_ip)
         
         # اعتبار البروكسي شغال إذا نجح في أي بروتوكول
-        working_protocols = [
-            results['http'], 
-            results['https'], 
-            results['connect_80'], 
-            results['connect_443'],
-            results['socks_test']
-        ]
-        results['is_working'] = any(protocol == '✅' for protocol in working_protocols)
+        results['is_working'] = (results['http'] == '✅') or (results['https'] == '✅') or (results['connect_80'] == '✅')
         
         # 🔴 إرسال تنبيه فقط لـ AS396982 Google LLC بالضبط
         if (results['ip_info'] and 
@@ -245,7 +190,7 @@ def start_command(message):
 🎯 **بوت فحص البروكسيات المتقدم** 🛡️
 
 ⚡ **المميزات:**
-• فحص HTTP/HTTPS/CONNECT/SOCKS
+• فحص HTTP/HTTPS/CONNECT 80
 • كشف مزودي الخدمة
 • تحليل مخاطر متقدم
 • سرعة فحص عالية
@@ -305,8 +250,6 @@ def show_final_results(chat_id, working_proxies):
         results_text += f"   🌐 **HTTP:** {proxy['http']}\n"
         results_text += f"   🔒 **HTTPS:** {proxy['https']}\n"
         results_text += f"   🔌 **CONNECT 80:** {proxy['connect_80']}\n"
-        results_text += f"   🔐 **CONNECT 443:** {proxy['connect_443']}\n"
-        results_text += f"   🧦 **SOCKS Test:** {proxy['socks_test']}\n"
         results_text += "─" * 40 + "\n\n"
     
     # إحصائيات عامة
@@ -314,15 +257,11 @@ def show_final_results(chat_id, working_proxies):
         http_count = sum(1 for p in truly_working if p['http'] == '✅')
         https_count = sum(1 for p in truly_working if p['https'] == '✅')
         connect_80_count = sum(1 for p in truly_working if p['connect_80'] == '✅')
-        connect_443_count = sum(1 for p in truly_working if p['connect_443'] == '✅')
-        socks_count = sum(1 for p in truly_working if p['socks_test'] == '✅')
         
         results_text += f"📈 **إحصائيات عامة:**\n"
         results_text += f"   • بروكسيات تدعم HTTP: **{http_count}**\n"
         results_text += f"   • بروكسيات تدعم HTTPS: **{https_count}**\n"
         results_text += f"   • بروكسيات تدعم CONNECT 80: **{connect_80_count}**\n"
-        results_text += f"   • بروكسيات تدعم CONNECT 443: **{connect_443_count}**\n"
-        results_text += f"   • بروكسيات تدعم SOCKS: **{socks_count}**\n"
     
     if len(truly_working) > 15:
         results_text += f"\n📁 **و {len(truly_working) - 15} بروكسي إضافي...**"
@@ -400,6 +339,8 @@ def process_text_check(message):
             break
         
         checked_count += 1
+        
+        # تحديث التقدم كل 10 بروكسيات
         if checked_count % 10 == 0:
             try:
                 bot.edit_message_text(
@@ -408,17 +349,28 @@ def process_text_check(message):
                     progress_msg.message_id
                 )
             except:
-                pass
+                # إذا فشل التحديث، نرسل رسالة جديدة
+                try:
+                    progress_msg = bot.send_message(
+                        chat_id, 
+                        f"🔍 جاري الفحص... {checked_count}/{len(proxies)}\n✅ وجدنا {len(working_proxies)} بروكسي شغال"
+                    )
+                except:
+                    pass
         
         result = check_single_proxy(ip, port, chat_id)
         if result and result['is_working']:
             working_proxies.append(result)
             user_results[chat_id] = working_proxies
         
-        time.sleep(0.3)
+        time.sleep(0.2)  # تقليل الوقت لزيادة السرعة
     
     # إذا لم يتم إيقاف البحث، عرض النتائج تلقائياً
     if active_checks.get(chat_id, True):
+        try:
+            bot.delete_message(chat_id, progress_msg.message_id)
+        except:
+            pass
         show_final_results(chat_id, working_proxies)
         active_checks[chat_id] = False
     else:
@@ -470,6 +422,8 @@ def process_url_check(message):
                 break
             
             checked_count += 1
+            
+            # تحديث التقدم كل 10 بروكسيات
             if checked_count % 10 == 0:
                 try:
                     bot.edit_message_text(
@@ -478,17 +432,28 @@ def process_url_check(message):
                         progress_msg.message_id
                     )
                 except:
-                    pass
+                    # إذا فشل التحديث، نرسل رسالة جديدة
+                    try:
+                        progress_msg = bot.send_message(
+                            chat_id, 
+                            f"🔍 جاري الفحص... {checked_count}/{len(proxies)}\n✅ وجدنا {len(working_proxies)} بروكسي شغال"
+                        )
+                    except:
+                        pass
             
             result = check_single_proxy(ip, port, chat_id)
             if result and result['is_working']:
                 working_proxies.append(result)
                 user_results[chat_id] = working_proxies
             
-            time.sleep(0.3)
+            time.sleep(0.2)  # تقليل الوقت لزيادة السرعة
         
         # إذا لم يتم إيقاف البحث، عرض النتائج تلقائياً
         if active_checks.get(chat_id, True):
+            try:
+                bot.delete_message(chat_id, progress_msg.message_id)
+            except:
+                pass
             show_final_results(chat_id, working_proxies)
             active_checks[chat_id] = False
         else:
@@ -504,7 +469,7 @@ def process_url_check(message):
 # تشغيل البوت
 if __name__ == "__main__":
     print("🟢 بدء تشغيل بوت فحص البروكسيات المتقدم...")
-    print("⚡ المميزات: فحص HTTP/HTTPS/CONNECT/SOCKS، كشف ASN، تحليل مخاطر")
+    print("⚡ المميزات: فحص HTTP/HTTPS/CONNECT 80، كشف ASN، تحليل مخاطر")
     print("🚨 التنبيهات: إشعارات فورية لبروكسيات AS396982 Google LLC فقط")
     print("🎯 البوت جاهز لاستقبال الطلبات...")
     bot.infinity_polling()
