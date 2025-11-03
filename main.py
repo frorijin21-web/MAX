@@ -44,11 +44,11 @@ def create_check_keyboard():
     return keyboard
 
 def send_google_alert(chat_id, proxy_info):
-    """إرسال تنبيه خاص عند العثور على بروكسي Google"""
+    """إرسال تنبيه خاص عند العثور على بروكسي Google المحدد"""
     alert_text = f"""
 🚨 **تنبيه عالي الأهمية!** 🚨
 
-🕵️ **تم العثور على بروكسي Google مميز:**
+🕵️ **تم العثور على بروكسي Google نادر:**
 
 📍 **IP:** `{proxy_info['ip']}:{proxy_info['port']}`
 🏢 **المزود:** Google LLC
@@ -130,7 +130,7 @@ def get_risk_emoji(risk_level):
     return emojis.get(risk_level, '⚪❓')
 
 def check_single_proxy(proxy_ip, proxy_port, chat_id):
-    """فحص HTTP/HTTPS/CONNECT فقط مع تنبيه Google"""
+    """فحص HTTP/HTTPS/CONNECT فقط مع تنبيه Google المحدد"""
     try:
         proxy_dict = {
             'http': f"http://{proxy_ip}:{proxy_port}",
@@ -152,7 +152,7 @@ def check_single_proxy(proxy_ip, proxy_port, chat_id):
             response = requests.get(
                 'http://httpbin.org/ip', 
                 proxies=proxy_dict, 
-                timeout=3,
+                timeout=5,  # زيادة الوقت
                 headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
             )
             if response.status_code == 200:
@@ -165,7 +165,7 @@ def check_single_proxy(proxy_ip, proxy_port, chat_id):
             response = requests.get(
                 'https://httpbin.org/ip',
                 proxies=proxy_dict, 
-                timeout=3,
+                timeout=5,  # زيادة الوقت
                 headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
             )
             if response.status_code == 200:
@@ -173,12 +173,12 @@ def check_single_proxy(proxy_ip, proxy_port, chat_id):
         except:
             pass
         
-        # فحص CONNECT 80
+        # فحص CONNECT 80 - إصلاح المشكلة
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(3)
+            sock.settimeout(5)  # زيادة الوقت
             result = sock.connect_ex((proxy_ip, int(proxy_port)))
-            results['connect_80'] = result == 0
+            results['connect_80'] = (result == 0)
             sock.close()
         except:
             results['connect_80'] = False
@@ -190,11 +190,11 @@ def check_single_proxy(proxy_ip, proxy_port, chat_id):
         working_checks = sum(1 for check in [results['http'], results['https']] if check == '✅')
         results['is_working'] = (working_checks >= 1) or results['connect_80']
         
-        # 🔴 إرسال تنبيه إذا كان بروكسي Google
+        # 🔴 إرسال تنبيه فقط لـ AS396982 Google LLC بالضبط
         if (results['ip_info'] and 
             results['is_working'] and 
-            'Google' in results['ip_info'].get('asn', '') and 
-            '396982' in results['ip_info'].get('asn', '')):
+            'AS396982' in results['ip_info'].get('asn', '') and 
+            'Google LLC' in results['ip_info'].get('isp', '')):
             
             send_google_alert(chat_id, results)
         
@@ -215,7 +215,7 @@ def start_command(message):
 • كشف مزودي الخدمة (Google, Amazon)
 • تحليل مخاطر متقدم
 • سرعة فحص عالية
-• تنبيه فوري لبروكسيات Google
+• تنبيه فوري لبروكسيات Google النادرة
 
 🎮 **اختر نوع الفحص:**
     """
@@ -294,9 +294,6 @@ def show_final_results(chat_id, working_proxies):
         reply_markup=create_main_keyboard(),
         parse_mode='Markdown'
     )
-    
-    # لا نمسح النتائج بعد العرض - قد يريد المستخدم رؤيتها مرة أخرى
-    # نتركها في الذاكرة حتى يبدأ فحص جديد
 
 @bot.message_handler(func=lambda message: message.text == "فحص نص")
 def check_text_handler(message):
@@ -304,7 +301,7 @@ def check_text_handler(message):
     msg = bot.send_message(
         message.chat.id, 
         "📝 أرسلي IP:Port أو قائمة بروكسيات\n\n**مثال:**\n`192.168.1.1:8080`\n`192.168.1.2:8080`\n`194.56.78.90:3128`",
-        reply_markup=create_check_keyboard(),  # الأزرار تبقى ظاهرة
+        reply_markup=create_check_keyboard(),
         parse_mode='Markdown'
     )
     bot.register_next_step_handler(msg, process_text_check)
@@ -315,7 +312,7 @@ def check_url_handler(message):
     msg = bot.send_message(
         message.chat.id,
         "🔗 أرسلي رابط ملف البروكسيات\n\n**مثال:**\n`https://example.com/proxies.txt`\n`http://site.com/proxy-list.txt`",
-        reply_markup=create_check_keyboard(),  # الأزرار تبقى ظاهرة
+        reply_markup=create_check_keyboard(),
         parse_mode='Markdown'
     )
     bot.register_next_step_handler(msg, process_url_check)
@@ -355,7 +352,7 @@ def process_text_check(message):
             break
         
         checked_count += 1
-        if checked_count % 10 == 0:  # تحديث كل 10 بروكسيات
+        if checked_count % 10 == 0:
             try:
                 bot.edit_message_text(
                     f"🔍 جاري الفحص... {checked_count}/{len(proxies)}\n✅ وجدنا {len(working_proxies)} بروكسي شغال\n🛑 /stop لايقاف الفحص",
@@ -370,7 +367,7 @@ def process_text_check(message):
             working_proxies.append(result)
             user_results[chat_id] = working_proxies
         
-        time.sleep(0.5)  # تقليل التأخير قليلاً
+        time.sleep(0.3)  # تقليل التأخير
     
     # إذا لم يتم إيقاف البحث، عرض النتائج تلقائياً
     if active_checks.get(chat_id, True):
@@ -422,7 +419,7 @@ def process_url_check(message):
                 break
             
             checked_count += 1
-            if checked_count % 10 == 0:  # تحديث كل 10 بروكسيات
+            if checked_count % 10 == 0:
                 try:
                     bot.edit_message_text(
                         f"🔍 جاري الفحص... {checked_count}/{len(proxies)}\n✅ وجدنا {len(working_proxies)} بروكسي شغال\n🛑 /stop لايقاف الفحص",
@@ -437,7 +434,7 @@ def process_url_check(message):
                 working_proxies.append(result)
                 user_results[chat_id] = working_proxies
             
-            time.sleep(0.5)  # تقليل التأخير قليلاً
+            time.sleep(0.3)  # تقليل التأخير
         
         # إذا لم يتم إيقاف البحث، عرض النتائج تلقائياً
         if active_checks.get(chat_id, True):
@@ -457,6 +454,6 @@ def process_url_check(message):
 if __name__ == "__main__":
     print("🟢 بدء تشغيل بوت فحص البروكسيات المتقدم...")
     print("⚡ المميزات: فحص HTTP/HTTPS/CONNECT، كشف ASN، تحليل مخاطر")
-    print("🚨 التنبيهات: إشعارات فورية لبروكسيات Google")
+    print("🚨 التنبيهات: إشعارات فورية لبروكسيات AS396982 Google LLC فقط")
     print("🎯 البوت جاهز لاستقبال الطلبات...")
     bot.infinity_polling()
