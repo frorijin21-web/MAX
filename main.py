@@ -27,29 +27,77 @@ def extract_ip_port(proxy_text):
     except:
         return None, None
 
-def get_asn_info(ip):
-    """الحصول على معلومات ASN والمزود"""
+def get_detailed_ip_info(ip):
+    """
+    الحصول على معلومات مفصلة عن الـ IP باستخدام ipapi.co
+    """
     try:
-        google_ranges = [
-            '8.8.', '8.34.', '8.35.', '23.236.', '23.251.', '34.0.', '34.1.', '34.2.', '34.3.', 
-            '34.4.', '34.16.', '34.32.', '34.64.', '34.96.', '34.128.', '34.160.', '34.192.', 
-            '35.184.', '35.188.', '35.192.', '35.196.', '35.200.', '35.204.', '35.208.', '35.212.',
-            '104.154.', '104.196.', '107.167.', '107.178.', '108.59.', '108.170.', '108.177.',
-            '130.211.', '136.112.', '142.250.', '142.251.', '146.148.', '162.216.', '162.222.',
-            '172.217.', '172.253.', '173.194.', '173.255.', '192.158.', '192.178.', '199.192.',
-            '199.223.', '207.223.', '208.46.', '208.68.', '208.81.', '208.127.', '209.85.'
-        ]
+        response = requests.get(f"http://ipapi.co/{ip}/json/", timeout=5)
+        data = response.json()
         
-        for range_ip in google_ranges:
-            if ip.startswith(range_ip):
-                return "Google LLC", "AS396982 Google LLC"
+        # استخراج المعلومات الأساسية
+        country = data.get('country_name', 'Unknown')
+        region = data.get('region', 'Unknown')
+        city = data.get('city', 'Unknown')
+        asn = data.get('asn', '')
+        isp = data.get('org', data.get('asn', 'Unknown'))
         
-        return "Unknown", "ASUnknown"
-    except:
-        return "Unknown", "ASUnknown"
+        # تنظيف وتنسيق بيانات ASN
+        asn_clean = f"AS{asn}" if asn else "ASUnknown"
+        
+        return {
+            'country': country,
+            'region': region, 
+            'city': city,
+            'asn': asn_clean,
+            'isp': isp,
+            'raw_data': data
+        }
+        
+    except Exception as e:
+        print(f"Error fetching IP info for {ip}: {e}")
+        return {
+            'country': 'Unknown',
+            'region': 'Unknown',
+            'city': 'Unknown', 
+            'asn': 'ASUnknown',
+            'isp': 'Unknown'
+        }
+
+def analyze_asn_risk(asn, isp):
+    """تحليل مستوى خطر ASN"""
+    risk_factors = {
+        'high_risk': ['Google', 'Amazon', 'Microsoft', 'Cloudflare', 'Facebook'],
+        'medium_risk': ['OVH', 'DigitalOcean', 'Linode', 'Vultr', 'Hetzner'],
+        'low_risk': ['ISP', 'Telecom', 'Communications', 'Network']
+    }
+    
+    asn_lower = str(asn).lower()
+    isp_lower = str(isp).lower()
+    
+    # كشف عالي الخطورة
+    for company in risk_factors['high_risk']:
+        if company.lower() in asn_lower or company.lower() in isp_lower:
+            return 'high'
+    
+    # كشف متوسط الخطورة
+    for company in risk_factors['medium_risk']:
+        if company.lower() in asn_lower or company.lower() in isp_lower:
+            return 'medium'
+    
+    return 'low'
+
+def get_risk_icon(risk_level):
+    """إرجاع أيقونة الخطر"""
+    icons = {
+        'high': '🔴🚨',
+        'medium': '🟡⚠️', 
+        'low': '⚪'
+    }
+    return icons.get(risk_level, '⚪')
 
 def check_single_proxy(proxy_text, user_id):
-    """فحص بروكسي واحد مع التحقق من التوقف - النسخة المحسنة"""
+    """فحص بروكسي واحد مع معلومات مفصلة"""
     if user_id in scanning_active and not scanning_active[user_id]:
         return None, "⏹️ تم إيقاف الفحص"
     
@@ -58,20 +106,32 @@ def check_single_proxy(proxy_text, user_id):
         return None, "❌ تنسيق غير صحيح"
     
     try:
+        # الحصول على المعلومات المفصلة أولاً
+        ip_info = get_detailed_ip_info(ip)
+        risk_level = analyze_asn_risk(ip_info['asn'], ip_info['isp'])
+        risk_icon = get_risk_icon(risk_level)
+        
         results = {
             'ip': ip,
             'port': port,
             'http': '❌',
             'https': '❌', 
             'connect': '❌',
-            'provider': 'Unknown',
-            'asn': 'ASUnknown',
             'is_working': False,
             'response_time': 0,
-            'text': proxy_text
+            'text': proxy_text,
+            # المعلومات المفصلة
+            'country': ip_info['country'],
+            'region': ip_info['region'],
+            'city': ip_info['city'],
+            'asn': ip_info['asn'],
+            'isp': ip_info['isp'],
+            'risk_level': risk_level,
+            'risk_icon': risk_icon,
+            'is_google': 'Google' in ip_info['isp'] or 'AS396982' in ip_info['asn']
         }
         
-        # --- فحص CONNECT 80 أولاً (الأسرع والأكثر كفاءة) ---
+        # --- فحص CONNECT 80 أولاً ---
         try:
             start_time = time.time()
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -83,25 +143,20 @@ def check_single_proxy(proxy_text, user_id):
                 results['connect'] = '✅'
                 results['is_working'] = True
                 results['response_time'] = connect_time
-                # إذا نجح CONNECT، نعتبره شغال ونتخطى الباقي لتوفير الوقت
-                provider, asn = get_asn_info(ip)
-                results['provider'] = provider
-                results['asn'] = asn
                 sock.close()
                 return results, None
             sock.close()
         except:
             pass
         
-        # --- فحص HTTP (إذا لم ينجح CONNECT) ---
+        # --- فحص HTTP ---
         try:
             start_time = time.time()
-            proxy_dict = {'http': f"http://{ip}:{port}", 'https': f"https://{ip}:{port}"}
+            proxy_dict = {'http': f"http://{ip}:{port}"}
             response = requests.get(
                 'http://httpbin.org/ip', 
                 proxies=proxy_dict, 
-                timeout=4,
-                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                timeout=4
             )
             http_time = round((time.time() - start_time) * 1000, 2)
             
@@ -109,23 +164,18 @@ def check_single_proxy(proxy_text, user_id):
                 results['http'] = '✅'
                 results['is_working'] = True
                 results['response_time'] = http_time
-                # إذا نجح HTTP، نتخطى HTTPS لتوفير الوقت
-                provider, asn = get_asn_info(ip)
-                results['provider'] = provider
-                results['asn'] = asn
                 return results, None
         except:
             pass
         
-        # --- فحص HTTPS (إذا لم ينجح HTTP) ---
+        # --- فحص HTTPS ---
         try:
             start_time = time.time()
-            proxy_dict = {'https': f"https://{ip}:{port}", 'http': f"http://{ip}:{port}"}
+            proxy_dict = {'https': f"https://{ip}:{port}"}
             response = requests.get(
                 'https://httpbin.org/ip',
                 proxies=proxy_dict, 
                 timeout=4,
-                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'},
                 verify=False
             )
             https_time = round((time.time() - start_time) * 1000, 2)
@@ -137,14 +187,7 @@ def check_single_proxy(proxy_text, user_id):
         except:
             pass
         
-        # --- معلومات ASN والمزود (فقط إذا كان شغال) ---
-        if results['is_working']:
-            provider, asn = get_asn_info(ip)
-            results['provider'] = provider
-            results['asn'] = asn
-            return results, None
-        else:
-            return None, None
+        return results if results['is_working'] else None, None
             
     except Exception as e:
         return None, f"❌ خطأ في الفحص: {str(e)}"
@@ -187,7 +230,6 @@ def check_proxies_list(proxies_list, user_id, chat_id, bot):
     checked = 0
     working = 0
     
-    # إرسال رسالة التقدم الأولى
     progress_message_id = update_progress_message(bot, chat_id, user_id, total, checked, working)
     last_update = time.time()
     
@@ -206,10 +248,9 @@ def check_proxies_list(proxies_list, user_id, chat_id, bot):
             if proxy_data:
                 working += 1
                 working_proxies.append(proxy_data)
-                if 'google' in proxy_data['provider'].lower():
+                if proxy_data['is_google']:
                     google_proxies.append(proxy_data)
             
-            # تحديث العداد كل ثانيتين أو عند انتهاء 10% من العمل
             current_time = time.time()
             if current_time - last_update > 2 or checked % max(1, total//10) == 0 or checked == total:
                 progress_message_id = update_progress_message(
@@ -223,19 +264,15 @@ def check_proxies_list(proxies_list, user_id, chat_id, bot):
 def send_welcome(message):
     """رسالة الترحيب"""
     welcome_text = """
-🚀 أهلاً بك في بوت فحص البروكسيات المتقدم!
+🚀 أهلاً بك في بوت فحص البروكسيات الذكي!
 
-⚡ المميزات:
-• فحص HTTP/HTTPS/CONNECT 80
+⚡ المميزات الجديدة:
+• تحليل مفصل لكل بروكسي (البلد، المنطقة، ASN، ISP)
 • كشف بروكسيات Google النادرة 🚨
-• فحص متعدد سريع
-• عداد تقدم حي
+• تحليل مستوى الخطر (🔴🚨 عالي، 🟡⚠️ متوسط، ⚪ منخفض)
+• فحص HTTP/HTTPS/CONNECT 80
 
-📝 كيفية الاستخدام:
-أرسل قائمة البروكسيات (واحد أو أكثر)
-مثال:
-34.41.115.197:3128
-192.168.1.1:8080
+📝 أرسل قائمة البروكسيات للبدء...
     """
     bot.send_message(message.chat.id, welcome_text)
 
@@ -256,7 +293,6 @@ def handle_all_messages(message):
     try:
         text = message.text.strip()
         
-        # فصل البروكسيات
         proxies_list = []
         for line in text.split('\n'):
             for item in line.split(','):
@@ -272,15 +308,11 @@ def handle_all_messages(message):
             bot.send_message(chat_id, "❌ الحد الأقصى 500 بروكسي")
             return
         
-        # بدء الفحص
         scanning_active[user_id] = True
-        
         bot.send_message(chat_id, f"🔍 بدء فحص {len(proxies_list)} بروكسي...")
         
-        # فحص البروكسيات
         working_proxies, google_proxies = check_proxies_list(proxies_list, user_id, chat_id, bot)
         
-        # إرسال النتائج
         if not working_proxies:
             bot.send_message(chat_id, "❌ لا توجد بروكسيات شغالة في القائمة")
             return
@@ -297,8 +329,9 @@ def handle_all_messages(message):
             for i, proxy in enumerate(google_proxies, 1):
                 alert_text += f"""
 {i}. {proxy['ip']}:{proxy['port']}
-   🏢 {proxy['provider']}
+   🏢 {proxy['isp']}
    🆔 {proxy['asn']} 🔴🚨
+   🌍 {proxy['country']} | {proxy['region']}
    ⚡ {proxy['response_time']}ms
                 """
             
@@ -317,16 +350,19 @@ def handle_all_messages(message):
         """
         
         for i, proxy in enumerate(working_proxies, 1):
-            google_flag = "🔴🚨" if 'google' in proxy['provider'].lower() else ""
-            response_time = f"⚡ {proxy['response_time']}ms" if proxy['response_time'] > 0 else ""
+            google_flag = "🔴🚨" if proxy['is_google'] else proxy['risk_icon']
             
             result_text += f"""
-{i}. {proxy['ip']}:{proxy['port']} {google_flag}
-   🏢 {proxy['provider']} {response_time}
-   🌐 HTTP: {proxy['http']} | HTTPS: {proxy['https']} | CONNECT: {proxy['connect']}
+{i}. **IP:** {proxy['ip']}:{proxy['port']}
+   🌍 **البلد:** {proxy['country']}
+   🏞️ **المنطقة:** {proxy['region']}
+   🏙️ **المدينة:** {proxy['city']}
+   🆔 **ASN:** {proxy['asn']} {google_flag}
+   📡 **ISP:** {proxy['isp']}
+   ⚡ **الاستجابة:** {proxy['response_time']}ms
+   🌐 **البروتوكولات:** HTTP: {proxy['http']} | HTTPS: {proxy['https']} | CONNECT: {proxy['connect']}
             """
         
-        # تقسيم الرسالة إذا كانت طويلة
         if len(result_text) > 4096:
             parts = [result_text[i:i+4096] for i in range(0, len(result_text), 4096)]
             for part in parts:
@@ -341,6 +377,6 @@ def handle_all_messages(message):
             scanning_active[user_id] = False
 
 if __name__ == "__main__":
-    print("🟢 بدء تشغيل بوت فحص البروكسيات المتقدم...")
-    print("⚡ المميزات: فحص HTTP/HTTPS/CONNECT، كشف Google، فحص متعدد")
+    print("🟢 بدء تشغيل بوت فحص البروكسيات الذكي...")
+    print("⚡ المميزات: تحليل مفصل، كشف Google، تحليل خطر")
     bot.infinity_polling()
