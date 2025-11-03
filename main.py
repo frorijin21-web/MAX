@@ -3,12 +3,25 @@ import requests
 import socket
 import time
 import concurrent.futures
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
 # توكن البوت
 bot = telebot.TeleBot("8420676859:AAGQ6ZgnTuUs648v_79hR_CEIw6VUqRE2B4")
 
 # متغيرات التحكم في الفحص
 scanning_active = {}
+
+def create_stop_keyboard():
+    """إنشاء لوحة المفاتيح مع زر الإيقاف"""
+    keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.add(KeyboardButton("⏹️ إيقاف الفحص"))
+    return keyboard
+
+def create_main_keyboard():
+    """إنشاء لوحة المفاتيح الرئيسية"""
+    keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.add(KeyboardButton("📋 فحص بروكسيات"))
+    return keyboard
 
 def extract_ip_port(proxy_text):
     """استخراج IP و PORT من النص"""
@@ -213,10 +226,10 @@ def update_progress_message(bot, chat_id, user_id, total, checked, working, mess
     
     try:
         if message_id:
-            bot.edit_message_text(progress_text, chat_id, message_id)
+            bot.edit_message_text(progress_text, chat_id, message_id, reply_markup=create_stop_keyboard())
             return message_id
         else:
-            msg = bot.send_message(chat_id, progress_text)
+            msg = bot.send_message(chat_id, progress_text, reply_markup=create_stop_keyboard())
             return msg.message_id
     except:
         return message_id
@@ -260,33 +273,60 @@ def check_proxies_list(proxies_list, user_id, chat_id, bot):
     
     return working_proxies, google_proxies
 
+def format_proxy_result(proxy, index):
+    """تنسيق نتيجة البروكسي بشكل مختصر"""
+    google_flag = "🔴🚨" if proxy['is_google'] else proxy['risk_icon']
+    response_time = f"⚡ {proxy['response_time']}ms" if proxy['response_time'] > 0 else ""
+    
+    # تحديد البروتوكول الناجح
+    protocol_port = ""
+    if proxy['http'] == '✅':
+        protocol_port = f"HTTP✅{proxy['port']}"
+    elif proxy['https'] == '✅':
+        protocol_port = f"HTTPS✅{proxy['port']}" 
+    elif proxy['connect'] == '✅':
+        protocol_port = f"CONNECT✅{proxy['port']}"
+    
+    return f"""
+{index}. **{proxy['ip']}:{proxy['port']}** {google_flag}
+   🌍 **البلد:** {proxy['country']}
+   🏢 **المزود:** {proxy['isp']}
+   🆔 **ASN:** {proxy['asn']}
+   {response_time} • {protocol_port}
+    """
+
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     """رسالة الترحيب"""
     welcome_text = """
 🚀 أهلاً بك في بوت فحص البروكسيات الذكي!
 
-⚡ المميزات الجديدة:
-• تحليل مفصل لكل بروكسي (البلد، المنطقة، ASN، ISP)
+⚡ المميزات:
+• فحص HTTP/HTTPS/CONNECT
+• معلومات مفصلة لكل بروكسي
 • كشف بروكسيات Google النادرة 🚨
-• تحليل مستوى الخطر (🔴🚨 عالي، 🟡⚠️ متوسط، ⚪ منخفض)
-• فحص HTTP/HTTPS/CONNECT 80
+• إيقاف فوري أثناء الفحص
 
 📝 أرسل قائمة البروكسيات للبدء...
     """
-    bot.send_message(message.chat.id, welcome_text)
+    bot.send_message(message.chat.id, welcome_text, reply_markup=create_main_keyboard())
 
-@bot.message_handler(commands=['stop'])
+@bot.message_handler(func=lambda message: message.text == "📋 فحص بروكسيات")
+def scan_button(message):
+    """زر فحص البروكسيات"""
+    msg = bot.send_message(message.chat.id, "📋 أرسل قائمة البروكسيات (واحد أو أكثر في كل سطر)", reply_markup=create_main_keyboard())
+    bot.register_next_step_handler(msg, process_scan_request)
+
+@bot.message_handler(func=lambda message: message.text == "⏹️ إيقاف الفحص")
 def stop_scan(message):
     """إيقاف الفحص"""
     user_id = message.from_user.id
     if user_id in scanning_active:
         scanning_active[user_id] = False
-        bot.send_message(message.chat.id, "⏹️ تم إيقاف الفحص")
+        bot.send_message(message.chat.id, "⏹️ تم إيقاف الفحص...", reply_markup=create_main_keyboard())
 
-@bot.message_handler(func=lambda message: True)
-def handle_all_messages(message):
-    """معالجة جميع الرسائل تلقائياً"""
+def process_scan_request(message):
+    """معالجة طلب الفحص"""
     user_id = message.from_user.id
     chat_id = message.chat.id
     
@@ -309,66 +349,12 @@ def handle_all_messages(message):
             return
         
         scanning_active[user_id] = True
-        bot.send_message(chat_id, f"🔍 بدء فحص {len(proxies_list)} بروكسي...")
+        bot.send_message(chat_id, f"🔍 بدء فحص {len(proxies_list)} بروكسي...", reply_markup=create_stop_keyboard())
         
         working_proxies, google_proxies = check_proxies_list(proxies_list, user_id, chat_id, bot)
         
-        if not working_proxies:
-            bot.send_message(chat_id, "❌ لا توجد بروكسيات شغالة في القائمة")
-            return
-        
-        # إرسال تنبيه Google إذا وجد
-        if google_proxies:
-            alert_text = f"""
-🚨 تنبيه Google النادر! 🚨
-
-تم العثور على {len(google_proxies)} بروكسي Google شغال
-
-📋 قائمة بروكسيات Google:
-            """
-            for i, proxy in enumerate(google_proxies, 1):
-                alert_text += f"""
-{i}. {proxy['ip']}:{proxy['port']}
-   🏢 {proxy['isp']}
-   🆔 {proxy['asn']} 🔴🚨
-   🌍 {proxy['country']} | {proxy['region']}
-   ⚡ {proxy['response_time']}ms
-                """
-            
-            bot.send_message(chat_id, alert_text)
-        
-        # إرسال النتائج النهائية
-        result_text = f"""
-📊 نتائج الفحص النهائية:
-
-• 📋 الإجمالي المفحوص: {len(proxies_list)}
-• ✅ البروكسيات الشغالة: {len(working_proxies)}
-• 🚨 بروكسيات Google: {len(google_proxies)}
-• ⚡ نسبة النجاح: {(len(working_proxies)/len(proxies_list))*100:.1f}%
-
-📋 البروكسيات الشغالة:
-        """
-        
-        for i, proxy in enumerate(working_proxies, 1):
-            google_flag = "🔴🚨" if proxy['is_google'] else proxy['risk_icon']
-            
-            result_text += f"""
-{i}. **IP:** {proxy['ip']}:{proxy['port']}
-   🌍 **البلد:** {proxy['country']}
-   🏞️ **المنطقة:** {proxy['region']}
-   🏙️ **المدينة:** {proxy['city']}
-   🆔 **ASN:** {proxy['asn']} {google_flag}
-   📡 **ISP:** {proxy['isp']}
-   ⚡ **الاستجابة:** {proxy['response_time']}ms
-   🌐 **البروتوكولات:** HTTP: {proxy['http']} | HTTPS: {proxy['https']} | CONNECT: {proxy['connect']}
-            """
-        
-        if len(result_text) > 4096:
-            parts = [result_text[i:i+4096] for i in range(0, len(result_text), 4096)]
-            for part in parts:
-                bot.send_message(chat_id, part)
-        else:
-            bot.send_message(chat_id, result_text)
+        # عرض النتائج
+        send_final_results(bot, chat_id, user_id, len(proxies_list), working_proxies, google_proxies)
             
     except Exception as e:
         bot.send_message(chat_id, f"❌ حدث خطأ: {str(e)}")
@@ -376,7 +362,62 @@ def handle_all_messages(message):
         if user_id in scanning_active:
             scanning_active[user_id] = False
 
+def send_final_results(bot, chat_id, user_id, total_proxies, working_proxies, google_proxies):
+    """إرسال النتائج النهائية"""
+    
+    if not working_proxies:
+        bot.send_message(chat_id, "❌ لا توجد بروكسيات شغالة في القائمة", reply_markup=create_main_keyboard())
+        return
+    
+    # إذا تم الإيقاف
+    if user_id in scanning_active and not scanning_active[user_id]:
+        result_text = f"""
+⏹️ **تم إيقاف الفحص**
+
+📊 **النتائج حتى الآن:**
+• 📋 الإجمالي: {total_proxies}
+• ✅ الشغالة: {len(working_proxies)}
+• 🚨 Google: {len(google_proxies)}
+
+"""
+    else:
+        result_text = f"""
+📊 **نتائج الفحص** • تم فحص {total_proxies} بروكسي
+
+✅ **الشغالة:** {len(working_proxies)}
+🚨 **Google:** {len(google_proxies)}
+⚡ **النسبة:** {(len(working_proxies)/total_proxies)*100:.1f}%
+
+"""
+    
+    # إرسال تنبيه Google إذا وجد
+    if google_proxies:
+        alert_text = f"🚨 **تم العثور على {len(google_proxies)} بروكسي Google** 🔴🚨\n\n"
+        bot.send_message(chat_id, alert_text)
+    
+    # إرسال النتائج
+    for i, proxy in enumerate(working_proxies, 1):
+        result_text += format_proxy_result(proxy, i)
+    
+    if len(result_text) > 4096:
+        parts = [result_text[i:i+4096] for i in range(0, len(result_text), 4096)]
+        for part in parts:
+            bot.send_message(chat_id, part, reply_markup=create_main_keyboard())
+    else:
+        bot.send_message(chat_id, result_text, reply_markup=create_main_keyboard())
+
+@bot.message_handler(func=lambda message: True)
+def handle_all_messages(message):
+    """معالجة جميع الرسائل تلقائياً"""
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    text = message.text
+    if ':' in text and any(char.isdigit() for char in text) and text not in ["📋 فحص بروكسيات", "⏹️ إيقاف الفحص"]:
+        process_scan_request(message)
+    elif text not in ["📋 فحص بروكسيات", "⏹️ إيقاف الفحص"]:
+        bot.send_message(chat_id, "📝 أرسل قائمة البروكسيات للفحص", reply_markup=create_main_keyboard())
+
 if __name__ == "__main__":
-    print("🟢 بدء تشغيل بوت فحص البروكسيات الذكي...")
-    print("⚡ المميزات: تحليل مفصل، كشف Google، تحليل خطر")
+    print("🟢 بدء تشغيل بوت فحص البروكسيات مع زر الإيقاف...")
     bot.infinity_polling()
