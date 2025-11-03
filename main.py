@@ -7,7 +7,7 @@ from datetime import datetime
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
 # توكن البوت - ضعيه هنا
-bot = telebot.TeleBot("8420676859:AAGQ6ZgnTuUs648v_79hR_CEIw6VUqRE2B4)
+bot = telebot.TeleBot("8420676859:AAGQ6ZgnTuUs648v_79hR_CEIw6VUqRE2B4")
 
 # تخزين العمليات والنتائج
 active_checks = {}
@@ -42,25 +42,6 @@ def create_check_keyboard():
     keyboard.add(btn_back)
     
     return keyboard
-
-def send_google_alert(chat_id, proxy_info):
-    """إرسال تنبيه خاص عند العثور على بروكسي Google المحدد"""
-    alert_text = f"""
-🚨 **تنبيه Google النادر!** 🚨
-
-📍 **IP:** `{proxy_info['ip']}:{proxy_info['port']}`
-🏢 **المزود:** Google LLC
-🆔 **ASN:** {proxy_info['ip_info']['asn']}
-📍 **الموقع:** {proxy_info['ip_info']['city']}, {proxy_info['ip_info']['country']}
-
-🔍 **نتائج الفحص:**
-   🌐 HTTP: {proxy_info['http']}
-   🔒 HTTPS: {proxy_info['https']}
-   🔌 CONNECT 80: {'✅' if proxy_info['connect_80'] else '❌'}
-
-⚡ **بروكسي Google نادر وجودة عالية!**
-"""
-    bot.send_message(chat_id, alert_text, parse_mode='Markdown')
 
 def get_detailed_ip_info(ip):
     """معلومات IP مفصلة مع مخاطر ASN"""
@@ -179,14 +160,6 @@ def check_single_proxy(proxy_ip, proxy_port, chat_id):
         working_checks = sum(1 for check in [results['http'], results['https']] if check == '✅')
         results['is_working'] = (working_checks >= 1) or results['connect_80']
         
-        # 🔴 إرسال تنبيه فقط لـ AS396982 Google LLC بالضبط
-        if (results['ip_info'] and 
-            results['is_working'] and 
-            'AS396982 Google LLC' in results['ip_info'].get('asn', '') and 
-            'Google LLC' in results['ip_info'].get('isp', '')):
-            
-            send_google_alert(chat_id, results)
-        
         return results
         
     except Exception as e:
@@ -204,7 +177,6 @@ def start_command(message):
 • كشف مزودي الخدمة (Google, Amazon)
 • تحليل مخاطر متقدم
 • سرعة فحص عالية
-• تنبيهات لبروكسيات Google النادرة
 
 🎮 **اختر نوع الفحص:**
     """
@@ -334,9 +306,9 @@ def process_text_check(message):
         bot.send_message(chat_id, "❌ لم أجد أي بروكسيات صالحة في النص")
         return
     
-    if len(proxies) > 1000:  # ⬅️ تغيير من 50 إلى 1000
-        bot.send_message(chat_id, f"⚠️ سيتم فحص أول 1000 بروكسي من أصل {len(proxies)}")
-        proxies = proxies[:1000]  # ⬅️ تغيير من 50 إلى 1000
+    if len(proxies) > 5000:
+        bot.send_message(chat_id, f"⚠️ سيتم فحص أول 5000 بروكسي من أصل {len(proxies)}")
+        proxies = proxies[:5000]
     
     progress_msg = bot.send_message(chat_id, f"🔍 بدء فحص {len(proxies)} بروكسي...\n⚡ جاري الفحص المتقدم")
     
@@ -349,7 +321,7 @@ def process_text_check(message):
             break
         
         checked_count += 1
-        if checked_count % 10 == 0:  # ⬅️ تغيير من 5 إلى 10 لأن العدد أكبر
+        if checked_count % 5 == 0:
             try:
                 bot.edit_message_text(
                     f"🔍 جاري الفحص... {checked_count}/{len(proxies)}\n✅ وجدنا {len(working_proxies)} بروكسي شغال",
@@ -364,7 +336,7 @@ def process_text_check(message):
             working_proxies.append(result)
             user_results[chat_id] = working_proxies
         
-        time.sleep(0.3)  # ⬅️ تقليل الوقت لأن العدد أكبر
+        time.sleep(0.5)
     
     # إذا لم يتم إيقاف البحث، عرض النتائج تلقائياً
     if active_checks.get(chat_id, True):
@@ -405,9 +377,9 @@ def process_url_check(message):
             bot.send_message(chat_id, "❌ لم أجد أي بروكسيات في الرابط")
             return
         
-        if len(proxies) > 1000:  # ⬅️ تغيير من 50 إلى 1000
-            bot.send_message(chat_id, f"⚠️ سيتم فحص أول 1000 بروكسي من أصل {len(proxies)}")
-            proxies = proxies[:1000]  # ⬅️ تغيير من 50 إلى 1000
+        if len(proxies) > 5000:
+            bot.send_message(chat_id, f"⚠️ سيتم فحص أول 5000 بروكسي من أصل {len(proxies)}")
+            proxies = proxies[:5000]
         
         progress_msg = bot.send_message(chat_id, f"🔍 بدء فحص {len(proxies)} بروكسي...\n⚡ جاري الفحص المتقدم")
         
@@ -419,7 +391,7 @@ def process_url_check(message):
                 break
             
             checked_count += 1
-            if checked_count % 10 == 0:  # ⬅️ تغيير من 5 إلى 10 لأن العدد أكبر
+            if checked_count % 5 == 0:
                 try:
                     bot.edit_message_text(
                         f"🔍 جاري الفحص... {checked_count}/{len(proxies)}\n✅ وجدنا {len(working_proxies)} بروكسي شغال",
@@ -434,7 +406,7 @@ def process_url_check(message):
                 working_proxies.append(result)
                 user_results[chat_id] = working_proxies
             
-            time.sleep(0.3)  # ⬅️ تقليل الوقت لأن العدد أكبر
+            time.sleep(0.5)
         
         # إذا لم يتم إيقاف البحث، عرض النتائج تلقائياً
         if active_checks.get(chat_id, True):
@@ -454,6 +426,5 @@ def process_url_check(message):
 if __name__ == "__main__":
     print("🟢 بدء تشغيل بوت فحص البروكسيات المتقدم...")
     print("⚡ المميزات: فحص HTTP/HTTPS/CONNECT، كشف ASN، تحليل مخاطر")
-    print("🚨 التنبيهات: إشعارات فورية لبروكسيات AS396982 Google LLC فقط")
     print("🎯 البوت جاهز لاستقبال الطلبات...")
     bot.infinity_polling()
