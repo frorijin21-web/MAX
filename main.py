@@ -5,424 +5,327 @@ import time
 import threading
 from datetime import datetime
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+import concurrent.futures
 
 # توكن البوت - ضعيه هنا
 bot = telebot.TeleBot("8420676859:AAGQ6ZgnTuUs648v_79hR_CEIw6VUqRE2B4")
 
-# تخزين العمليات والنتائج
-active_checks = {}
-user_results = {}
+# قائمة المستخدمين المصرح لهم
+authorized_users = []  # ضعي هنا أي دي المستخدمين المصرح لهم
 
-def create_main_keyboard():
-    """لوحة المفاتيح الرئيسية - زرين فقط"""
-    keyboard = ReplyKeyboardMarkup(
-        resize_keyboard=True,
-        one_time_keyboard=False
-    )
-    
-    btn_start = KeyboardButton("/start")
-    btn_stop = KeyboardButton("/stop")
-    
-    keyboard.add(btn_start, btn_stop)
-    
-    return keyboard
+def is_authorized(user_id):
+    """التحقق من صلاحية المستخدم"""
+    return user_id in authorized_users if authorized_users else True
 
-def create_check_keyboard():
-    """لوحة فحص بعد الضغط على /start"""
-    keyboard = ReplyKeyboardMarkup(
-        resize_keyboard=True,
-        one_time_keyboard=False
-    )
-    
-    btn_text = KeyboardButton("فحص نص")
-    btn_url = KeyboardButton("فحص رابط")
-    btn_back = KeyboardButton("/stop")
-    
-    keyboard.add(btn_text, btn_url)
-    keyboard.add(btn_back)
-    
-    return keyboard
-
-def get_detailed_ip_info(ip):
-    """معلومات IP مفصلة مع مخاطر ASN"""
+def extract_ip_port(proxy_text):
+    """استخراج IP و PORT من النص"""
     try:
-        response = requests.get(f"http://ip-api.com/json/{ip}?fields=66846719", timeout=5)
-        data = response.json()
+        if ':' in proxy_text:
+            parts = proxy_text.split(':')
+            if len(parts) >= 2:
+                ip = parts[0].strip()
+                port = int(parts[1].strip())
+                return ip, port
+        return None, None
+    except:
+        return None, None
+
+def get_asn_info(ip):
+    """الحصول على معلومات ASN (مثال مبسط)"""
+    try:
+        # فحص إذا كان IP تابع لـ Google
+        if ip.startswith(('34.', '35.', '104.', '108.', '130.', '140.', '142.', '143.', '144.', '146.', '148.', '172.', '173.', '174.', '209.')):
+            return "Google LLC", "AS396982 Google LLC"
         
-        if data['status'] == 'success':
-            # تحليل مخاطر ASN
-            risk_level = analyze_asn_risk(data.get('as', ''), data.get('isp', ''))
-            
-            return {
-                'asn': data.get('as', 'غير معروف'),
-                'isp': data.get('isp', 'غير معروف'),
-                'country': data.get('country', 'غير معروف'),
-                'city': data.get('city', 'غير معروف'),
-                'org': data.get('org', 'غير معروف'),
-                'risk_level': risk_level,
-                'risk_emoji': get_risk_emoji(risk_level)
-            }
+        # يمكن إضافة مزودين آخرين إذا تريدين
+        hostname = socket.gethostbyaddr(ip)[0]
+        if 'google' in hostname.lower():
+            return "Google LLC", "AS396982 Google LLC"
+        else:
+            return "Unknown", "ASUnknown"
+    except:
+        return "Unknown", "ASUnknown"
+
+def test_proxy_protocols(proxy_ip, proxy_port, timeout=10):
+    """فحص البروكسي على جميع البروتوكولات"""
+    proxy_url = f"{proxy_ip}:{proxy_port}"
+    results = {
+        'http': '❌',
+        'https': '❌', 
+        'connect': '❌',
+        'working': False
+    }
+    
+    # فحص HTTP
+    try:
+        proxies = {'http': f'http://{proxy_url}'}
+        response = requests.get('http://httpbin.org/ip', proxies=proxies, timeout=timeout)
+        if response.status_code == 200:
+            results['http'] = '✅'
+            results['working'] = True
     except:
         pass
     
-    return None
-
-def analyze_asn_risk(asn, isp):
-    """تحليل مستوى خطر ASN"""
-    risk_factors = {
-        'high_risk': ['Google', 'Amazon', 'Microsoft', 'Cloudflare', 'Facebook'],
-        'medium_risk': ['OVH', 'DigitalOcean', 'Linode', 'Vultr', 'Hetzner'],
-        'low_risk': ['ISP', 'Telecom', 'Communications', 'Network']
-    }
-    
-    asn_lower = str(asn).lower()
-    isp_lower = str(isp).lower()
-    
-    # كشف高风险
-    for company in risk_factors['high_risk']:
-        if company.lower() in asn_lower or company.lower() in isp_lower:
-            return 'high'
-    
-    # كشف متوسط风险
-    for company in risk_factors['medium_risk']:
-        if company.lower() in asn_lower or company.lower() in isp_lower:
-            return 'medium'
-    
-    return 'low'
-
-def get_risk_emoji(risk_level):
-    """إيموجي حسب مستوى الخطورة"""
-    emojis = {
-        'high': '🔴🚨',
-        'medium': '🟡⚠️', 
-        'low': '🟢✅'
-    }
-    return emojis.get(risk_level, '⚪❓')
-
-def check_single_proxy(proxy_ip, proxy_port, chat_id):
-    """فحص HTTP/HTTPS/CONNECT فقط"""
+    # فحص HTTPS
     try:
-        proxy_dict = {
-            'http': f"http://{proxy_ip}:{proxy_port}",
-            'https': f"https://{proxy_ip}:{proxy_port}"
-        }
+        proxies = {'https': f'https://{proxy_url}'}
+        response = requests.get('https://httpbin.org/ip', proxies=proxies, timeout=timeout)
+        if response.status_code == 200:
+            results['https'] = '✅'
+            results['working'] = True
+    except:
+        pass
+    
+    # فحص CONNECT (للمتصفح)
+    try:
+        proxies = {'https': f'https://{proxy_url}'}
+        response = requests.get('https://www.google.com', proxies=proxies, timeout=timeout)
+        if response.status_code == 200:
+            results['connect'] = '✅'
+            results['working'] = True
+    except:
+        pass
+    
+    return results
+
+def check_single_proxy(proxy_text):
+    """فحص بروكسي واحد"""
+    ip, port = extract_ip_port(proxy_text)
+    if not ip or not port:
+        return None, "❌ تنسيق غير صحيح"
+    
+    # الحصول على معلومات ASN
+    provider, asn = get_asn_info(ip)
+    
+    # فحص البروتوكولات
+    protocols = test_proxy_protocols(ip, port)
+    
+    # نرجع البيانات فقط إذا كان البروكسي شغال
+    if protocols['working']:
+        return {
+            'ip': ip,
+            'port': port,
+            'provider': provider,
+            'asn': asn,
+            'protocols': protocols,
+            'text': proxy_text
+        }, None
+    else:
+        return None, "❌ البروكسي غير شغال"
+
+def check_multiple_proxies(proxies_list):
+    """فحص قائمة بروكسيات - يرجع فقط الشغالة"""
+    working_proxies = []
+    google_proxies = []
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_proxy = {executor.submit(check_single_proxy, proxy): proxy for proxy in proxies_list}
         
-        results = {
-            'ip': proxy_ip,
-            'port': proxy_port,
-            'http': '❌',
-            'https': '❌',
-            'connect_80': False,
-            'ip_info': None,
-            'is_working': False
-        }
-        
-        # فحص HTTP
-        try:
-            response = requests.get(
-                'http://httpbin.org/ip', 
-                proxies=proxy_dict, 
-                timeout=3,
-                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-            )
-            if response.status_code == 200:
-                results['http'] = '✅'
-        except:
-            pass
-        
-        # فحص HTTPS
-        try:
-            response = requests.get(
-                'https://httpbin.org/ip',
-                proxies=proxy_dict, 
-                timeout=3,
-                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-            )
-            if response.status_code == 200:
-                results['https'] = '✅'
-        except:
-            pass
-        
-        # فحص CONNECT 80
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(3)
-            result = sock.connect_ex((proxy_ip, int(proxy_port)))
-            results['connect_80'] = result == 0
-            sock.close()
-        except:
-            results['connect_80'] = False
-        
-        # معلومات IP
-        results['ip_info'] = get_detailed_ip_info(proxy_ip)
-        
-        # اعتبار البروكسي شغال إذا نجح في أي فحص
-        working_checks = sum(1 for check in [results['http'], results['https']] if check == '✅')
-        results['is_working'] = (working_checks >= 1) or results['connect_80']
-        
-        return results
-        
-    except Exception as e:
-        print(f"Error checking proxy: {e}")
-        return None
+        for future in concurrent.futures.as_completed(future_to_proxy):
+            proxy_data, error = future.result()
+            if proxy_data:  # فقط إذا كان شغال
+                working_proxies.append(proxy_data)
+                if 'google' in proxy_data['provider'].lower():
+                    google_proxies.append(proxy_data)
+    
+    return working_proxies, google_proxies
 
 @bot.message_handler(commands=['start'])
-def start_command(message):
-    """عند الضغط على /start"""
+def send_welcome(message):
+    """رسالة الترحيب"""
+    if not is_authorized(message.from_user.id):
+        bot.reply_to(message, "❌ غير مصرح لك باستخدام البوت")
+        return
+    
+    keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.add(KeyboardButton("🔄 فحص بروكسي واحد"))
+    keyboard.add(KeyboardButton("📋 فحص قائمة بروكسيات"))
+    keyboard.add(KeyboardButton("ℹ️ معلومات البوت"))
+    
     welcome_text = """
-🎯 **بوت فحص البروكسيات المتقدم** 🛡️
-
-⚡ **المميزات:**
-• فحص HTTP/HTTPS/CONNECT
-• كشف مزودي الخدمة (Google, Amazon)
-• تحليل مخاطر متقدم
-• سرعة فحص عالية
-
-🎮 **اختر نوع الفحص:**
+    🚀 أهلاً بك في بوت فحص البروكسيات المتقدم!
+    
+    ⚡ المميزات:
+    • فحص HTTP/HTTPS/CONNECT
+    • كشف بروكسيات Google النادرة 🚨
+    • عرض البروكسيات الشغالة فقط ✅
+    • فحص متعدد سريع
+    
+    📖 الأوامر المتاحة:
+    /start - بدء الاستخدام
+    /scan - فحص بروكسي
+    /bulk - فحص قائمة
     """
     
-    bot.send_message(
-        message.chat.id,
-        welcome_text,
-        reply_markup=create_check_keyboard()
-    )
+    bot.send_message(message.chat.id, welcome_text, reply_markup=keyboard)
 
-@bot.message_handler(commands=['stop'])
-def stop_command(message):
-    """عند الضغط على /stop - يتوقف ويعرض النتائج"""
-    chat_id = message.chat.id
-    
-    # إيقاف أي عملية جارية
-    if chat_id in active_checks:
-        active_checks[chat_id] = False
-    
-    # عرض النتائج إذا كانت موجودة
-    if chat_id in user_results and user_results[chat_id]:
-        results = user_results[chat_id]
-        show_final_results(chat_id, results)
-    else:
-        bot.send_message(
-            chat_id,
-            "🛑 تم إيقاف البحث\n❌ لا توجد نتائج لعرضها",
-            reply_markup=create_main_keyboard()
-        )
-
-def show_final_results(chat_id, working_proxies):
-    """عرض نتائج مفصلة"""
-    truly_working = [p for p in working_proxies if p.get('is_working', False)]
-    
-    if not truly_working:
-        bot.send_message(chat_id, "❌ لم أعثر على أي بروكسيات شغالة")
+@bot.message_handler(commands=['scan'])
+def scan_proxy_command(message):
+    """فحص بروكسي واحد"""
+    if not is_authorized(message.from_user.id):
+        bot.reply_to(message, "❌ غير مصرح لك باستخدام البوت")
         return
     
-    results_text = f"📊 **نتائج الفحص المتقدم**\n\n"
-    results_text += f"✅ **تم العثور على {len(truly_working)} بروكسي شغال**\n\n"
-    
-    for i, proxy in enumerate(truly_working[:15], 1):
-        results_text += f"**{i}. {proxy['ip']}:{proxy['port']}**\n"
-        
-        # معلومات IP والمخاطر
-        if proxy['ip_info']:
-            info = proxy['ip_info']
-            results_text += f"   🏢 **ISP:** {info['isp']}\n"
-            results_text += f"   🆔 **ASN:** {info['asn']} {info['risk_emoji']}\n"
-            results_text += f"   📍 **الموقع:** {info['city']}, {info['country']}\n"
-        
-        # نتائج الفحص
-        results_text += f"   🌐 **HTTP:** {proxy['http']}\n"
-        results_text += f"   🔒 **HTTPS:** {proxy['https']}\n"
-        results_text += f"   🔌 **CONNECT 80:** {'✅' if proxy['connect_80'] else '❌'}\n"
-        results_text += "─" * 40 + "\n\n"
-    
-    # إحصائيات عامة
-    if len(truly_working) > 0:
-        http_count = sum(1 for p in truly_working if p['http'] == '✅')
-        https_count = sum(1 for p in truly_working if p['https'] == '✅')
-        connect_count = sum(1 for p in truly_working if p['connect_80'])
-        
-        results_text += f"📈 **إحصائيات عامة:**\n"
-        results_text += f"   • بروكسيات تدعم HTTP: **{http_count}**\n"
-        results_text += f"   • بروكسيات تدعم HTTPS: **{https_count}**\n"
-        results_text += f"   • بروكسيات تدعم CONNECT: **{connect_count}**\n"
-    
-    if len(truly_working) > 15:
-        results_text += f"\n📁 **و {len(truly_working) - 15} بروكسي إضافي...**"
-    
-    results_text += "\n🛑 **تم إيقاف البحث بناءً على طلبك**"
-    
-    bot.send_message(
-        chat_id,
-        results_text,
-        reply_markup=create_main_keyboard(),
-        parse_mode='Markdown'
-    )
-    
-    # مسح النتائج بعد العرض
-    if chat_id in user_results:
-        del user_results[chat_id]
+    msg = bot.send_message(message.chat.id, "🔍 أرسل البروكسي للتفحص (مثال: 34.41.115.197:3128)")
+    bot.register_next_step_handler(msg, process_single_proxy)
 
-@bot.message_handler(func=lambda message: message.text == "فحص نص")
-def check_text_handler(message):
-    """عند الضغط على فحص نص"""
-    msg = bot.send_message(
-        message.chat.id, 
-        "📝 أرسلي IP:Port أو قائمة بروكسيات\n\n**مثال:**\n`192.168.1.1:8080`\n`192.168.1.2:8080`\n`194.56.78.90:3128`",
-        reply_markup=create_check_keyboard(),
-        parse_mode='Markdown'
-    )
-    bot.register_next_step_handler(msg, process_text_check)
-
-@bot.message_handler(func=lambda message: message.text == "فحص رابط")
-def check_url_handler(message):
-    """عند الضغط على فحص رابط"""
-    msg = bot.send_message(
-        message.chat.id,
-        "🔗 أرسلي رابط ملف البروكسيات\n\n**مثال:**\n`https://example.com/proxies.txt`\n`http://site.com/proxy-list.txt`",
-        reply_markup=create_check_keyboard(),
-        parse_mode='Markdown'
-    )
-    bot.register_next_step_handler(msg, process_url_check)
-
-def process_text_check(message):
-    """معالجة فحص النص مع حفظ النتائج"""
-    chat_id = message.chat.id
-    active_checks[chat_id] = True
-    user_results[chat_id] = []
-    
-    # تحليل النص المدخل
-    proxies = []
-    for line in message.text.split('\n'):
-        line = line.strip()
-        if ':' in line:
-            parts = line.split(':')
-            if len(parts) >= 2:
-                ip = parts[0].strip()
-                port = parts[1].strip()
-                port = ''.join(filter(str.isdigit, port))
-                if port:
-                    proxies.append((ip, port))
-    
-    if not proxies:
-        bot.send_message(chat_id, "❌ لم أجد أي بروكسيات صالحة في النص")
-        return
-    
-    if len(proxies) > 50:
-        bot.send_message(chat_id, f"⚠️ سيتم فحص أول 50 بروكسي من أصل {len(proxies)}")
-        proxies = proxies[:50]
-    
-    progress_msg = bot.send_message(chat_id, f"🔍 بدء فحص {len(proxies)} بروكسي...\n⚡ جاري الفحص المتقدم")
-    
-    # فحص جميع البروكسيات
-    working_proxies = []
-    checked_count = 0
-    
-    for ip, port in proxies:
-        if not active_checks.get(chat_id, True):
-            break
-        
-        checked_count += 1
-        if checked_count % 5 == 0:
-            try:
-                bot.edit_message_text(
-                    f"🔍 جاري الفحص... {checked_count}/{len(proxies)}\n✅ وجدنا {len(working_proxies)} بروكسي شغال",
-                    chat_id,
-                    progress_msg.message_id
-                )
-            except:
-                pass
-        
-        result = check_single_proxy(ip, port, chat_id)
-        if result and result['is_working']:
-            working_proxies.append(result)
-            user_results[chat_id] = working_proxies
-        
-        time.sleep(0.5)
-    
-    # إذا لم يتم إيقاف البحث، عرض النتائج تلقائياً
-    if active_checks.get(chat_id, True):
-        show_final_results(chat_id, working_proxies)
-        active_checks[chat_id] = False
-    else:
-        bot.send_message(
-            chat_id,
-            f"🛑 تم إيقاف البحث\n✅ تم فحص {checked_count} بروكسي - وجدنا {len(working_proxies)} شغال",
-            reply_markup=create_main_keyboard()
-        )
-
-def process_url_check(message):
-    """معالجة فحص الرابط مع حفظ النتائج"""
-    chat_id = message.chat.id
-    active_checks[chat_id] = True
-    user_results[chat_id] = []
-    
+def process_single_proxy(message):
+    """معالجة فحص بروكسي واحد"""
     try:
-        bot.send_message(chat_id, "⏬ جاري تحميل البروكسيات من الرابط...")
+        proxy_text = message.text.strip()
+        bot.send_message(message.chat.id, "⏳ جاري الفحص...")
         
-        response = requests.get(message.text, timeout=10)
-        content = response.text
+        proxy_data, error = check_single_proxy(proxy_text)
         
-        proxies = []
-        for line in content.split('\n'):
-            line = line.strip()
-            if ':' in line and '.' in line:
-                parts = line.split(':')
-                if len(parts) >= 2:
-                    ip = parts[0].strip()
-                    port = parts[1].strip()
-                    port = ''.join(filter(str.isdigit, port))
-                    if port and ip.replace('.', '').isdigit():
-                        proxies.append((ip, port))
-        
-        if not proxies:
-            bot.send_message(chat_id, "❌ لم أجد أي بروكسيات في الرابط")
+        if error:
+            bot.send_message(message.chat.id, error)
             return
         
-        if len(proxies) > 50:
-            bot.send_message(chat_id, f"⚠️ سيتم فحص أول 50 بروكسي من أصل {len(proxies)}")
-            proxies = proxies[:50]
+        # بناء رسالة النتيجة
+        result_text = f"""
+📊 نتيجة فحص البروكسي:
+
+📍 العنوان: {proxy_data['ip']}:{proxy_data['port']}
+🏢 المزود: {proxy_data['provider']}
+🆔 ASN: {proxy_data['asn']} {'🔴🚨' if 'google' in proxy_data['provider'].lower() else ''}
+
+🌐 البروتوكولات:
+• HTTP: {proxy_data['protocols']['http']}
+• HTTPS: {proxy_data['protocols']['https']}
+• CONNECT: {proxy_data['protocols']['connect']}
+        """
         
-        progress_msg = bot.send_message(chat_id, f"🔍 بدء فحص {len(proxies)} بروكسي...\n⚡ جاري الفحص المتقدم")
+        # إرسال تنبيه إذا كان Google
+        if 'google' in proxy_data['provider'].lower():
+            alert_text = f"""
+🚨 تنبيه Google النادر! 🚨
+
+📍 IP: {proxy_data['ip']}:{proxy_data['port']}
+🏢 المزود: {proxy_data['provider']}
+🆔 ASN: {proxy_data['asn']} 🔴🚨
+
+🎯 تم العثور على بروكسي Google نادر وشغال!
+            """
+            bot.send_message(message.chat.id, alert_text)
         
-        working_proxies = []
-        checked_count = 0
-        
-        for ip, port in proxies:
-            if not active_checks.get(chat_id, True):
-                break
-            
-            checked_count += 1
-            if checked_count % 5 == 0:
-                try:
-                    bot.edit_message_text(
-                        f"🔍 جاري الفحص... {checked_count}/{len(proxies)}\n✅ وجدنا {len(working_proxies)} بروكسي شغال",
-                        chat_id,
-                        progress_msg.message_id
-                    )
-                except:
-                    pass
-            
-            result = check_single_proxy(ip, port, chat_id)
-            if result and result['is_working']:
-                working_proxies.append(result)
-                user_results[chat_id] = working_proxies
-            
-            time.sleep(0.5)
-        
-        # إذا لم يتم إيقاف البحث، عرض النتائج تلقائياً
-        if active_checks.get(chat_id, True):
-            show_final_results(chat_id, working_proxies)
-            active_checks[chat_id] = False
-        else:
-            bot.send_message(
-                chat_id,
-                f"🛑 تم إيقاف البحث\n✅ تم فحص {checked_count} بروكسي - وجدنا {len(working_proxies)} شغال",
-                reply_markup=create_main_keyboard()
-            )
+        bot.send_message(message.chat.id, result_text)
         
     except Exception as e:
-        bot.send_message(chat_id, f"❌ خطأ في تحميل الرابط: {str(e)}")
+        bot.send_message(message.chat.id, f"❌ حدث خطأ: {str(e)}")
 
-# تشغيل البوت
+@bot.message_handler(commands=['bulk'])
+def bulk_scan_command(message):
+    """فحص قائمة بروكسيات"""
+    if not is_authorized(message.from_user.id):
+        bot.reply_to(message, "❌ غير مصرح لك باستخدام البوت")
+        return
+    
+    msg = bot.send_message(message.chat.id, "📋 أرسل قائمة البروكسيات (كل بروكسي في سطر) - الحد 500")
+    bot.register_next_step_handler(msg, process_bulk_scan)
+
+def process_bulk_scan(message):
+    """معالجة فحص القائمة"""
+    try:
+        proxies_text = message.text.strip()
+        proxies_list = [p.strip() for p in proxies_text.split('\n') if p.strip()]
+        
+        if len(proxies_list) > 500:
+            bot.send_message(message.chat.id, "❌ الحد الأقصى 500 بروكسي")
+            return
+        
+        bot.send_message(message.chat.id, f"⏳ جاري فحص {len(proxies_list)} بروكسي...")
+        
+        working_proxies, google_proxies = check_multiple_proxies(proxies_list[:500])
+        
+        # إذا ما في بروكسيات شغالة
+        if not working_proxies:
+            bot.send_message(message.chat.id, "❌ لا توجد بروكسيات شغالة في القائمة")
+            return
+        
+        # إرسال تنبيه Google إذا وجد
+        if google_proxies:
+            alert_text = f"""
+🚨 تنبيه Google النادر! 🚨
+
+تم العثور على {len(google_proxies)} بروكسي Google شغال
+
+📋 قائمة بروكسيات Google:
+            """
+            for i, proxy in enumerate(google_proxies, 1):
+                alert_text += f"""
+{i}. {proxy['ip']}:{proxy['port']}
+   🏢 {proxy['provider']}
+   🆔 {proxy['asn']} 🔴🚨
+                """
+            
+            bot.send_message(message.chat.id, alert_text)
+        
+        # إرسال النتائج النهائية (فقط البروكسيات الشغالة)
+        result_text = f"""
+📊 نتائج الفحص الشامل:
+
+🔍 العدد المفحوص: {len(proxies_list)}
+✅ البروكسيات الشغالة: {len(working_proxies)}
+🚨 بروكسيات Google: {len(google_proxies)}
+
+📋 قائمة البروكسيات الشغالة فقط:
+        """
+        
+        for i, proxy in enumerate(working_proxies, 1):
+            google_flag = "🔴🚨" if 'google' in proxy['provider'].lower() else ""
+            result_text += f"""
+{i}. {proxy['ip']}:{proxy['port']}
+   🏢 {proxy['provider']} {google_flag}
+   🌐 HTTP: {proxy['protocols']['http']} | HTTPS: {proxy['protocols']['https']} | CONNECT: {proxy['protocols']['connect']}
+            """
+        
+        # تقسيم الرسالة إذا كانت طويلة
+        if len(result_text) > 4096:
+            parts = [result_text[i:i+4096] for i in range(0, len(result_text), 4096)]
+            for part in parts:
+                bot.send_message(message.chat.id, part)
+        else:
+            bot.send_message(message.chat.id, result_text)
+            
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ حدث خطأ: {str(e)}")
+
+@bot.message_handler(func=lambda message: True)
+def handle_all_messages(message):
+    """معالجة جميع الرسائل"""
+    if not is_authorized(message.from_user.id):
+        bot.reply_to(message, "❌ غير مصرح لك باستخدام البوت")
+        return
+    
+    text = message.text
+    
+    if text == "🔄 فحص بروكسي واحد":
+        scan_proxy_command(message)
+    elif text == "📋 فحص قائمة بروكسيات":
+        bulk_scan_command(message)
+    elif text == "ℹ️ معلومات البوت":
+        bot_info = """
+🤖 بوت فحص البروكسيات المتقدم
+
+⚡ المميزات:
+• فحص سريع ومتعدد الخيوط
+• كشف بروكسيات Google النادرة 🚨
+• عرض البروكسيات الشغالة فقط ✅
+• دعم 3 بروتوكولات
+
+🎯 الإعدادات:
+• سرعة فحص: حتى 500 بروكسي
+• يعرض: الشغالة فقط
+• تنبيهات: Google خاصة
+        """
+        bot.send_message(message.chat.id, bot_info)
+    else:
+        # إذا كان يبدو كبروكسي، فحصه تلقائياً
+        if ':' in text and any(char.isdigit() for char in text):
+            process_single_proxy(message)
+        else:
+            bot.send_message(message.chat.id, "❌ أمر غير معروف، استخدم الأزرار أو /start")
+
 if __name__ == "__main__":
     print("🟢 بدء تشغيل بوت فحص البروكسيات المتقدم...")
     print("⚡ المميزات: فحص HTTP/HTTPS/CONNECT، كشف ASN، تحليل مخاطر")
