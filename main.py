@@ -61,8 +61,8 @@ def get_asn_info(ip):
     except:
         return "Unknown", "ASUnknown"
 
-def test_proxy_advanced(proxy_ip, proxy_port, timeout=8):
-    """فحص متقدم للبروكسي مع محاولات متعددة"""
+def test_proxy_advanced(proxy_ip, proxy_port, timeout=4):
+    """فحص متقدم للبروكسي مع محاولات متعددة وفحص تدريجي"""
     proxy_url = f"{proxy_ip}:{proxy_port}"
     results = {
         'http': '❌',
@@ -72,48 +72,65 @@ def test_proxy_advanced(proxy_ip, proxy_port, timeout=8):
         'response_time': 0
     }
     
-    test_urls = {
-        'http': 'http://httpbin.org/ip',
-        'https': 'https://httpbin.org/ip',
-        'connect': 'https://www.google.com'
-    }
+    # 1. فحص HTTP أولاً (الأسرع عادة)
+    try:
+        start_time = time.time()
+        proxies_http = {'http': f'http://{proxy_url}', 'https': f'https://{proxy_url}'}
+        response = requests.get(
+            'http://httpbin.org/ip', 
+            proxies=proxies_http, 
+            timeout=timeout,
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        )
+        response_time = round((time.time() - start_time) * 1000, 2)
+        
+        if response.status_code == 200:
+            results['http'] = '✅'
+            results['working'] = True
+            results['response_time'] = response_time
+            # إذا شغال HTTP، نعود مباشرة لتوفير الوقت
+            return results
+    except:
+        pass
     
-    for protocol, test_url in test_urls.items():
-        try:
-            start_time = time.time()
-            
-            if protocol == 'http':
-                proxies = {'http': f'http://{proxy_url}', 'https': f'https://{proxy_url}'}
-            else:
-                proxies = {'https': f'https://{proxy_url}', 'http': f'http://{proxy_url}'}
-            
-            response = requests.get(
-                test_url, 
-                proxies=proxies, 
-                timeout=timeout,
-                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-            )
-            
-            response_time = round((time.time() - start_time) * 1000, 2)
-            
-            if response.status_code == 200:
-                results[protocol] = '✅'
-                results['working'] = True
-                if results['response_time'] == 0 or response_time < results['response_time']:
-                    results['response_time'] = response_time
-                    
-        except requests.exceptions.ConnectTimeout:
-            continue
-        except requests.exceptions.ReadTimeout:
-            continue
-        except requests.exceptions.ProxyError:
-            continue
-        except requests.exceptions.SSLError:
-            continue
-        except requests.exceptions.ConnectionError:
-            continue
-        except:
-            continue
+    # 2. فحص HTTPS ثانياً
+    try:
+        start_time = time.time()
+        proxies_https = {'https': f'https://{proxy_url}', 'http': f'http://{proxy_url}'}
+        response = requests.get(
+            'https://httpbin.org/ip', 
+            proxies=proxies_https, 
+            timeout=timeout,
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        )
+        response_time = round((time.time() - start_time) * 1000, 2)
+        
+        if response.status_code == 200:
+            results['https'] = '✅'
+            results['working'] = True
+            results['response_time'] = response_time
+            return results
+    except:
+        pass
+    
+    # 3. فحص CONNECT أخيراً (للمتصفح)
+    try:
+        start_time = time.time()
+        proxies_connect = {'https': f'https://{proxy_url}', 'http': f'http://{proxy_url}'}
+        response = requests.get(
+            'https://www.google.com', 
+            proxies=proxies_connect, 
+            timeout=timeout,
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        )
+        response_time = round((time.time() - start_time) * 1000, 2)
+        
+        if response.status_code == 200:
+            results['connect'] = '✅'
+            results['working'] = True
+            results['response_time'] = response_time
+    except:
+        pass
     
     return results
 
@@ -151,7 +168,7 @@ def update_progress_message(bot, chat_id, user_id, total, checked, working, mess
     if user_id in scanning_active and not scanning_active[user_id]:
         return None
     
-    progress = (checked / total) * 100
+    progress = (checked / total) * 100 if total > 0 else 0
     progress_bar = "🟢" * int(progress / 10) + "⚪" * (10 - int(progress / 10))
     
     progress_text = f"""
@@ -208,12 +225,15 @@ def check_proxies_list(proxies_list, user_id, chat_id, bot):
     
     # إرسال رسالة التقدم الأولى
     progress_message_id = update_progress_message(bot, chat_id, user_id, total, checked, working)
+    last_update = time.time()
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=25) as executor:
         future_to_proxy = {executor.submit(check_single_proxy, proxy, user_id): proxy for proxy in proxies_list}
         
         for future in concurrent.futures.as_completed(future_to_proxy):
             if user_id in scanning_active and not scanning_active[user_id]:
+                for f in future_to_proxy:
+                    f.cancel()
                 executor.shutdown(wait=False)
                 break
                 
@@ -226,11 +246,13 @@ def check_proxies_list(proxies_list, user_id, chat_id, bot):
                 if 'google' in proxy_data['provider'].lower():
                     google_proxies.append(proxy_data)
             
-            # تحديث التقدم كل 5 عمليات أو عند الانتهاء
-            if checked % 5 == 0 or checked == total:
+            # تحديث العداد كل ثانيتين كحد أدنى أو عند انتهاء 10% من العمل
+            current_time = time.time()
+            if current_time - last_update > 2 or checked % max(1, total//10) == 0 or checked == total:
                 progress_message_id = update_progress_message(
                     bot, chat_id, user_id, total, checked, working, progress_message_id
                 )
+                last_update = current_time
     
     return working_proxies, google_proxies
 
@@ -249,26 +271,18 @@ def send_welcome(message):
     • كشف بروكسيات Google النادرة 🚨
     • عرض البروكسيات الشغالة فقط ✅
     • عداد تقدم متقدم ⏳
-    • إيقاف الفحص أثناء العمل ⏹️
+    • إيقاف فوري أثناء العمل ⏹️
     
-    📖 كيفية الاستخدام:
-    فقط أرسل قائمة البروكسيات (واحد أو أكثر)
+    🎯 طريقة الاستخدام:
+    فقط أرسل البروكسي أو قائمة البروكسيات
     مثال:
     192.168.1.1:8080
     34.41.115.197:3128
+    
+    وسيبدأ الفحص تلقائياً!
     """
     
     bot.send_message(message.chat.id, welcome_text, reply_markup=create_main_keyboard())
-
-@bot.message_handler(commands=['scan'])
-def scan_command(message):
-    """بدء الفحص (للاستخدام القديم)"""
-    if not is_authorized(message.from_user.id):
-        bot.reply_to(message, "❌ غير مصرح لك باستخدام البوت")
-        return
-    
-    msg = bot.send_message(message.chat.id, "📋 أرسل قائمة البروكسيات للفحص")
-    bot.register_next_step_handler(msg, process_scan_request)
 
 def process_scan_request(message):
     """معالجة طلب الفحص التلقائي"""
@@ -297,8 +311,6 @@ def process_scan_request(message):
         # بدء الفحص
         scanning_active[user_id] = True
         scan_results[user_id] = {'working': [], 'google': []}
-        
-        bot.send_message(chat_id, f"🔍 بدء فحص {len(proxies_list)} بروكسي...")
         
         # فحص البروكسيات
         working_proxies, google_proxies = check_proxies_list(proxies_list, user_id, chat_id, bot)
@@ -356,9 +368,10 @@ def send_scan_results(bot, chat_id, user_id, total_proxies, working_proxies, goo
     result_text = f"""
 📊 نتائج الفحص النهائية:
 
-• 📋 الإجمالي: {total_proxies}
-• ✅ الشغالة: {len(working_proxies)}
-• 🚨 Google: {len(google_proxies)}
+• 📋 الإجمالي المفحوص: {total_proxies}
+• ✅ البروكسيات الشغالة: {len(working_proxies)}
+• 🚨 بروكسيات Google: {len(google_proxies)}
+• ⚡ نسبة النجاح: {(len(working_proxies)/total_proxies)*100:.1f}%
 
 📋 البروكسيات الشغالة:
     """
@@ -387,7 +400,7 @@ def stop_scan(message):
     user_id = message.from_user.id
     if user_id in scanning_active:
         scanning_active[user_id] = False
-        bot.send_message(message.chat.id, "⏹️ جاري إيقاف الفحص...", reply_markup=create_main_keyboard())
+        bot.send_message(message.chat.id, "⏹️ تم إيقاف الفحص بنجاح!", reply_markup=create_main_keyboard())
 
 @bot.message_handler(func=lambda message: message.text == "📋 فحص قائمة بروكسيات")
 def bulk_scan_button(message):
@@ -399,18 +412,19 @@ def bulk_scan_button(message):
 def bot_info(message):
     """معلومات البوت"""
     bot_info_text = """
-🤖 بوت فحص البروكسيات المتقدم
+🤖 بوت فحص البروكسيات المتقدم - الإصدار المحسن
 
-⚡ المميزات:
-• فحص تلقائي (مفرد/متعدد)
-• كشف بروكسيات Google النادرة 🚨
-• عداد تقدم متقدم ⏳
-• إيقاف الفحص أثناء العمل ⏹️
-• فحص متقدم بثلاث محاولات
+⚡ المميزات الجديدة:
+• فحص متسلسل سريع (HTTP → HTTPS → CONNECT)
+• 25 عملية فحص متوازية
+• وقت استجابة محسن (4 ثواني)
+• تحديث حي ومستمر للعداد
+• إيقاف فوري
 
-🎯 الخصائص:
-• السرعة: 15 بروكسي في نفس الوقت
-• الدقة: فحص متقدم بوقت استجابة
+🎯 الخصائص التقنية:
+• السرعة: 25 بروكسي في نفس الوقت
+• الدقة: فحص تدريجي متسلسل
+• الكفاءة: توقف عند أول نجاح
 • السعة: حتى 500 بروكسي
     """
     bot.send_message(message.chat.id, bot_info_text)
@@ -429,13 +443,13 @@ def handle_all_messages(message):
         process_scan_request(message)
     elif text not in ["📋 فحص قائمة بروكسيات", "ℹ️ معلومات البوت", "⏹️ إيقاف الفحص"]:
         bot.send_message(message.chat.id, 
-                       "❌ أمر غير معروف\n\n" +
-                       "📝 فقط أرسل البروكسيات للفحص التلقائي\n" +
-                       "مثال:\n192.168.1.1:8080\n34.41.115.197:3128", 
+                       "🎯 أرسل البروكسيات للفحص التلقائي\n\n" +
+                       "📝 مثال:\n192.168.1.1:8080\n34.41.115.197:3128\n\n" +
+                       "أو استخدم الأزرار أدناه 👇", 
                        reply_markup=create_main_keyboard())
 
 if __name__ == "__main__":
     print("🟢 بدء تشغيل بوت فحص البروكسيات المتقدم...")
-    print("⚡ المميزات: فحص تلقائي، عداد تقدم، إيقاف، كشف Google")
+    print("⚡ المميزات: فحص تدريجي سريع، 25 عملية متوازية، تحديث حي")
     print("🎯 البوت جاهز لاستقبال الطلبات...")
     bot.infinity_polling()
